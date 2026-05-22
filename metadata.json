@@ -1,0 +1,6 @@
+{
+  "name": "Hustle 骑手端",
+  "description": "专业、高效、智能的移动端骑手配送管理服务平台，支持任务抢单、订单管理、钱包明细、业绩统计及个性化主题切换。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
