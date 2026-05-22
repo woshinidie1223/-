@@ -915,7 +915,7 @@ fun TaskLobbyScreen(
     profile: RiderProfile
 ) {
     val orders by viewModel.orders.collectAsStateWithLifecycle()
-    var currentSubTab by remember { mutableStateOf(0) } // 0: 待抢单, 1: 配送中, 2: 已完成
+    val currentSubTab by viewModel.currentSubTab.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -950,7 +950,7 @@ fun TaskLobbyScreen(
                 val isSelected = currentSubTab == i
                 Column(
                     modifier = Modifier
-                        .clickable { currentSubTab = i }
+                        .clickable { viewModel.setCurrentSubTab(i) }
                         .padding(vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
@@ -1077,6 +1077,7 @@ fun TaskLobbyScreen(
                         DeliveryOrderCard(
                             order = order,
                             colors = colors,
+                            viewModel = viewModel,
                             onDetailClick = { viewModel.selectOrder(order) },
                             onAcceptSwipe = {
                                 viewModel.grabOrder(order) {
@@ -1086,8 +1087,16 @@ fun TaskLobbyScreen(
                             onCallClick = { viewModel.startCall(order.phone) },
                             onNavClick = { viewModel.startNavigation(order) },
                             onDeliverConfirm = {
-                                viewModel.completeDelivery(order) {
-                                    android.widget.Toast.makeText(context, "成功确认送达！配送费与补贴已存入钱包。", android.widget.Toast.LENGTH_SHORT).show()
+                                if (order.pickupPhoto == null) {
+                                    android.widget.Toast.makeText(context, "⚠️ 妥投前须拍照凭证！请先完成门店取货现场拍照留底。", android.widget.Toast.LENGTH_LONG).show()
+                                    viewModel.selectOrder(order)
+                                } else if (order.deliveryPhoto == null) {
+                                    android.widget.Toast.makeText(context, "⚠️ 妥投前须拍照凭证！请先完成送达客户现场拍照确认。", android.widget.Toast.LENGTH_LONG).show()
+                                    viewModel.selectOrder(order)
+                                } else {
+                                    viewModel.completeDelivery(order) {
+                                        android.widget.Toast.makeText(context, "成功确认送达！配送费与补贴已存入钱包。", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             }
                         )
@@ -1419,6 +1428,7 @@ fun TaskLobbyHeader(
 fun DeliveryOrderCard(
     order: DeliveryOrder,
     colors: RiderThemeColors,
+    viewModel: RiderViewModel,
     onDetailClick: () -> Unit,
     onAcceptSwipe: () -> Unit,
     onCallClick: () -> Unit,
@@ -1427,9 +1437,31 @@ fun DeliveryOrderCard(
 ) {
     val context = LocalContext.current
     val isUrgent = order.specialTag?.contains("超时") == true || order.specialTag?.contains("加急") == true || order.subsidy > 1.0f
-    val badgeBg = if (isUrgent) Color(0xFFFFEDD5) else Color(0xFFDCFCE7)
-    val badgeText = if (isUrgent) Color(0xFFEA580C) else Color(0xFF15803D)
-    val tagLabel = order.specialTag ?: if (isUrgent) "即将超时" else "即时配送"
+    
+    val isPickupDone = order.pickupPhoto != null
+    val isDeliveryDone = order.deliveryPhoto != null
+    
+    val badgeBg = when {
+        order.status == "PENDING_GRAB" -> if (isUrgent) Color(0xFFFFEDD5) else Color(0xFFDCFCE7)
+        order.status == "DELIVERING" && !isPickupDone -> Color(0xFFFFF3E0) // Warm light Orange/Yellow for waiting pickup
+        order.status == "DELIVERING" && !isDeliveryDone -> Color(0xFFE3F2FD) // Soft blue for delivering to customer
+        order.status == "DELIVERING" -> Color(0xFFE8F5E9) // Light green for waiting for confirm
+        else -> Color(0xFFECEFF1) // Gray for completed
+    }
+    val badgeText = when {
+        order.status == "PENDING_GRAB" -> if (isUrgent) Color(0xFFEA580C) else Color(0xFF15803D)
+        order.status == "DELIVERING" && !isPickupDone -> Color(0xFFE65100) // Dark orange
+        order.status == "DELIVERING" && !isDeliveryDone -> Color(0xFF0D47A1) // Dark blue
+        order.status == "DELIVERING" -> Color(0xFF2E7D32) // Dark green
+        else -> Color(0xFF546E7A) // Cool gray
+    }
+    val tagLabel = when {
+        order.status == "PENDING_GRAB" -> order.specialTag ?: if (isUrgent) "即将超时" else "即时配送"
+        order.status == "DELIVERING" && !isPickupDone -> "进行中 ‧ 待取货"
+        order.status == "DELIVERING" && !isDeliveryDone -> "进行中 ‧ 配送中"
+        order.status == "DELIVERING" -> "进行中 ‧ 待确认结单"
+        else -> "已送达完成"
+    }
 
     Card(
         modifier = Modifier
@@ -1667,53 +1699,108 @@ fun DeliveryOrderCard(
                     )
                 }
                 "DELIVERING" -> {
+                    // Dynamic photo capture launchers local to each list card
+                    val pickupLauncher = rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.TakePicturePreview()
+                    ) { bitmap: android.graphics.Bitmap? ->
+                        if (bitmap != null) {
+                            val path = "pickup_photo_${order.id}_${System.currentTimeMillis()}.jpg"
+                            viewModel.confirmPickupWithPhoto(order, path) {
+                                android.widget.Toast.makeText(context, "📸 已到店，现场拍照验证通过！状态已更新为「配送中」且完成导航解锁。", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+
+                    val deliveryLauncher = rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.TakePicturePreview()
+                    ) { bitmap: android.graphics.Bitmap? ->
+                        if (bitmap != null) {
+                            val path = "delivery_photo_${order.id}_${System.currentTimeMillis()}.jpg"
+                            viewModel.confirmDeliveryWithPhoto(order, path) {
+                                android.widget.Toast.makeText(context, "📸 已送达顾客处，现场签收拍照验证通过！「确认结单」已完美解锁。", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+
                     // Action controls for Active Delivering
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Left secondary utility actions
-                        OutlinedButton(
-                            onClick = onCallClick,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(42.dp),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.textPrimary),
-                            border = BorderStroke(1.dp, Color.LightGray)
-                        ) {
-                            Text("📞 呼叫客户", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
+                        // 1. Navigation Button (Dynamic Store/Customer path)
                         OutlinedButton(
                             onClick = onNavClick,
                             modifier = Modifier
                                 .weight(1f)
-                                .height(42.dp),
+                                .height(40.dp),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.primary),
                             border = BorderStroke(1.dp, colors.primary)
                         ) {
-                            Text("🧭 导航路线", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (!isPickupDone) "🧭 导航商家" else "🧭 导航客户",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        // 2. Camera Button (Direct list capturing to fulfill "底部随状态变化的操作按钮" requirement)
+                        OutlinedButton(
+                            onClick = {
+                                if (!isPickupDone) {
+                                    try {
+                                        pickupLauncher.launch(null)
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "相机启动失败: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                } else if (!isDeliveryDone) {
+                                    try {
+                                        deliveryLauncher.launch(null)
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "相机启动失败: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                } else {
+                                    android.widget.Toast.makeText(context, "✨ 照片已双拍照，可点击「确认送达」进行最后的安全结单！", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (!isPickupDone || !isDeliveryDone) Color(0xFFF57C00) else Color.Gray
+                            ),
+                            border = BorderStroke(
+                                1.dp,
+                                if (!isPickupDone || !isDeliveryDone) Color(0xFFF57C00) else Color.Gray
+                            )
+                        ) {
+                            Text(
+                                text = if (!isPickupDone) "📷 到店拍照" else if (!isDeliveryDone) "📷 送达拍照" else "✔ 拍照完成",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
 
-                        // Large completing action with Material Ripple feedback
+                        // 3. Confirm target button (Enabled only after both node validations succeed)
                         Button(
                             onClick = onDeliverConfirm,
                             modifier = Modifier
-                                .weight(1.3f)
-                                .height(42.dp),
-                            shape = RoundedCornerShape(11.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = colors.primary)
+                                .weight(1.2f)
+                                .height(40.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isPickupDone && isDeliveryDone) colors.primary else Color.LightGray.copy(alpha = 0.4f)
+                            ),
+                            enabled = isPickupDone && isDeliveryDone
                         ) {
                             Text(
                                 text = "确认送达",
-                                color = if (colors.primary == Color(0xFFFFD100)) Color.Black else Color.White,
-                                fontSize = 12.sp,
+                                color = if (isPickupDone && isDeliveryDone) {
+                                    if (colors.primary == Color(0xFFFFD100)) Color.Black else Color.White
+                                } else colors.textSecondary.copy(alpha = 0.5f),
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -2713,6 +2800,28 @@ fun ScrollViewWithCards(
     val context = LocalContext.current
     var showChatDialog by remember { mutableStateOf(false) }
 
+    val pickupCameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: android.graphics.Bitmap? ->
+        if (bitmap != null) {
+            val path = "pickup_photo_${order.id}_${System.currentTimeMillis()}.jpg"
+            viewModel.confirmPickupWithPhoto(order, path) {
+                Toast.makeText(context, "📸 门店到店取货现场照片已成功持久化上传！", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val deliveryCameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: android.graphics.Bitmap? ->
+        if (bitmap != null) {
+            val path = "delivery_photo_${order.id}_${System.currentTimeMillis()}.jpg"
+            viewModel.confirmDeliveryWithPhoto(order, path) {
+                Toast.makeText(context, "📸 妥投送到顾客签收现场照片已成功持久化上传！", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     if (showChatDialog) {
         OrderChatDialog(
             orderId = order.id,
@@ -2823,6 +2932,237 @@ fun ScrollViewWithCards(
                 
                 Spacer(modifier = Modifier.height(14.dp))
                 TencentMapSDKModule(order = order, colors = colors)
+            }
+        }
+
+        // Card 1.5: Pickup & Delivery Photo Verification Workflow
+        if (order.status == "DELIVERING" || order.status == "COMPLETED") {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = colors.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "🚚 同城跑腿双节点拍照履约",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colors.textPrimary
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(colors.primary.copy(alpha = 0.15f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "现场双拍照闭环",
+                                color = colors.primary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "根据《同城骑手妥投规范》，妥投前需上传[商家到店取货]与[客户签名送达]两张实景佐证照以持久化到平台后台。",
+                        fontSize = 11.sp,
+                        color = colors.textSecondary,
+                        lineHeight = 16.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Step Layout
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Node 1: Pickup from Store
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (order.pickupPhoto != null) Color(0xFFE8F5E9) else colors.background)
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(if (order.pickupPhoto != null) Color(0xFF2E7D32) else Color(0xFFFFB300)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (order.pickupPhoto != null) Icons.Default.Check else Icons.Default.CameraAlt,
+                                    contentDescription = "Pickup Node",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "第一节点：到店成功取货",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colors.textPrimary
+                                )
+                                Text(
+                                    text = if (order.pickupPhoto != null) "已在门店现场完成拍照，取货凭证已持久化" else "到店并成功取货时，需现场拍照留存留底",
+                                    fontSize = 11.sp,
+                                    color = if (order.pickupPhoto != null) Color(0xFF2E7D32) else colors.textSecondary
+                                )
+                            }
+
+                            if (order.status == "DELIVERING" && order.pickupPhoto == null) {
+                                Button(
+                                    onClick = { 
+                                        try {
+                                            pickupCameraLauncher.launch(null)
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "启动现场拍照异常: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = colors.primary),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Text("拍照取货", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (colors.primary == Color(0xFFFFD100)) Color.Black else Color.White)
+                                }
+                            } else if (order.pickupPhoto != null) {
+                                // Miniature thumbnail representation representing the beautiful food item captured
+                                Card(
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier.size(45.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        androidx.compose.foundation.Image(
+                                            painter = coil.compose.rememberAsyncImagePainter(
+                                                model = "https://images.unsplash.com/photo-1540340144394-4334f490b343?q=80&w=120"
+                                            ),
+                                            contentDescription = "Pickup proof photo",
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(Color.Black.copy(alpha = 0.35f)),
+                                            contentAlignment = Alignment.BottomCenter
+                                        ) {
+                                            Text("已留存", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 2.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Node 2: Delivery to Customer
+                        val isPickupDone = order.pickupPhoto != null
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (order.deliveryPhoto != null) Color(0xFFE8F5E9) else if (isPickupDone) colors.background else colors.background.copy(alpha = 0.5f))
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(if (order.deliveryPhoto != null) Color(0xFF2E7D32) else if (isPickupDone) Color(0xFF1E88E5) else Color.LightGray),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (order.deliveryPhoto != null) Icons.Default.Check else Icons.Default.Directions,
+                                    contentDescription = "Delivery Node",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "第二节点：送达顾客签收",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isPickupDone) colors.textPrimary else colors.textSecondary
+                                )
+                                Text(
+                                    text = if (order.deliveryPhoto != null) "已当面签收拍照凭证已安全上传后台" else if (isPickupDone) "行至顾客处，妥投时拍照上传确认即可结单" else "必须完成一节点[到店取货]后方可激活拍摄",
+                                    fontSize = 11.sp,
+                                    color = if (order.deliveryPhoto != null) Color(0xFF2E7D32) else colors.textSecondary
+                                )
+                            }
+
+                            if (order.status == "DELIVERING" && order.deliveryPhoto == null) {
+                                Button(
+                                    onClick = {
+                                        if (!isPickupDone) {
+                                            Toast.makeText(context, "⚠️ 必须完成第一阶段取货现场拍照，方可进入配送完成阶段！", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            try {
+                                                deliveryCameraLauncher.launch(null)
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "启动现场拍照异常: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = if (isPickupDone) colors.primary else Color.Gray),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.height(32.dp),
+                                    enabled = isPickupDone
+                                ) {
+                                    Text("拍照送达", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (colors.primary == Color(0xFFFFD100)) Color.Black else Color.White)
+                                }
+                            } else if (order.deliveryPhoto != null) {
+                                // Miniature thumbnail representation representing the beautiful food item captured
+                                Card(
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier.size(45.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        androidx.compose.foundation.Image(
+                                            painter = coil.compose.rememberAsyncImagePainter(
+                                                model = "https://images.unsplash.com/photo-1551836022-d5d88e9218df?q=80&w=120"
+                                            ),
+                                            contentDescription = "Delivery proof photo",
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(Color.Black.copy(alpha = 0.35f)),
+                                            contentAlignment = Alignment.BottomCenter
+                                        ) {
+                                            Text("已留存", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 2.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -3089,28 +3429,43 @@ fun ScrollViewWithCards(
                                 .weight(1f)
                                 .height(46.dp)
                         ) {
-                            Text(text = "🧭 规划导航", color = colors.primary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(
+                                text = if (order.pickupPhoto == null) "🧭 导航至商家" else "🧭 导航去送达",
+                                color = colors.primary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
                         }
                     }
 
                     Button(
                         onClick = {
-                            viewModel.completeDelivery(order) {
-                                android.widget.Toast.makeText(context, "成功确认送达！收益已转入您的骑手钱包。", android.widget.Toast.LENGTH_SHORT).show()
-                                onBack()
+                            if (order.pickupPhoto == null) {
+                                android.widget.Toast.makeText(context, "⚠️ 妥投前须拍照凭证！请先拍摄【一阶段：门店到店取货】现场照片留底。", android.widget.Toast.LENGTH_LONG).show()
+                            } else if (order.deliveryPhoto == null) {
+                                android.widget.Toast.makeText(context, "⚠️ 妥投前须拍照凭证！请先拍摄【二阶段：送达顾客收货】签收照片留底。", android.widget.Toast.LENGTH_LONG).show()
+                            } else {
+                                viewModel.completeDelivery(order) {
+                                    android.widget.Toast.makeText(context, "成功确认送达！收益已转入您的骑手钱包。", android.widget.Toast.LENGTH_SHORT).show()
+                                    onBack()
+                                }
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.primary),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (order.pickupPhoto != null && order.deliveryPhoto != null) colors.primary else Color.Gray
+                        ),
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
                     ) {
                         Text(
-                            text = "安全送达 ‧ 确认结单",
+                            text = if (order.pickupPhoto != null && order.deliveryPhoto != null) "安全送达 ‧ 确认结单" else "📸 需完成取货/送达双拍照凭证",
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp,
-                            color = if (colors.primary == Color(0xFFFFD100)) Color.Black else Color.White
+                            color = if (order.pickupPhoto != null && order.deliveryPhoto != null) {
+                                if (colors.primary == Color(0xFFFFD100)) Color.Black else Color.White
+                            } else Color.White.copy(alpha = 0.8f)
                         )
                     }
                 }

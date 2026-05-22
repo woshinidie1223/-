@@ -40,7 +40,9 @@ data class DeliveryOrder(
     val status: String, // "PENDING_GRAB", "DELIVERING", "COMPLETED"
     val specialTag: String? = null, // e.g., "超重货物(>10kg)", "高额奖赏", "即时即送"
     val acceptTime: Long? = null,
-    val completeTime: Long? = null
+    val completeTime: Long? = null,
+    val pickupPhoto: String? = null,
+    val deliveryPhoto: String? = null
 )
 
 @Entity(tableName = "wallet_transactions")

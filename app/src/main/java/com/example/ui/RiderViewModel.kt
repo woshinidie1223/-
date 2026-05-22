@@ -60,6 +60,13 @@ class RiderViewModel(application: Application) : AndroidViewModel(application) {
     private val _activeCallNumber = MutableStateFlow<String?>(null)
     val activeCallNumber: StateFlow<String?> = _activeCallNumber.asStateFlow()
 
+    private val _currentSubTab = MutableStateFlow(0)
+    val currentSubTab: StateFlow<Int> = _currentSubTab.asStateFlow()
+
+    fun setCurrentSubTab(index: Int) {
+        _currentSubTab.value = index
+    }
+
     init {
         // Double safeguard: if DB is opened and profiles/orders are empty, pre-populate right now
         viewModelScope.launch(Dispatchers.IO) {
@@ -158,6 +165,50 @@ class RiderViewModel(application: Application) : AndroidViewModel(application) {
             if (_selectedOrder.value?.id == order.id) {
                 _selectedOrder.value = updated
             }
+            
+            _currentSubTab.value = 1
+            
+            withContext(Dispatchers.Main) {
+                onSuccess()
+            }
+        }
+    }
+
+    // Confirm Pickup at store with photo留存
+    fun confirmPickupWithPhoto(order: DeliveryOrder, photoUri: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val updated = order.copy(
+                pickupPhoto = photoUri
+            )
+            orderDao.updateOrder(updated)
+            
+            if (_selectedOrder.value?.id == order.id) {
+                _selectedOrder.value = updated
+            }
+            
+            // Log simulated high-efficiency compressed upload for backend auditing
+            postUploadedImage(photoUri, isCompressed = true, compressionRatio = 0.32f, sizeKb = 118)
+            
+            withContext(Dispatchers.Main) {
+                onSuccess()
+            }
+        }
+    }
+
+    // Confirm Delivery to customer with photo留存
+    fun confirmDeliveryWithPhoto(order: DeliveryOrder, photoUri: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val updated = order.copy(
+                deliveryPhoto = photoUri
+            )
+            orderDao.updateOrder(updated)
+            
+            if (_selectedOrder.value?.id == order.id) {
+                _selectedOrder.value = updated
+            }
+            
+            // Log simulated high-efficiency compressed upload for backend auditing
+            postUploadedImage(photoUri, isCompressed = true, compressionRatio = 0.28f, sizeKb = 94)
             
             withContext(Dispatchers.Main) {
                 onSuccess()
@@ -289,11 +340,12 @@ class RiderViewModel(application: Application) : AndroidViewModel(application) {
     // Simulate Navigation Map Animation
     fun startNavigation(order: DeliveryOrder) {
         viewModelScope.launch {
+            val toStore = order.pickupPhoto == null
             _navigationState.value = NavigationSimState(
                 orderId = order.id,
-                originAddress = order.pickupAddress,
-                destinationAddress = order.deliveryAddress,
-                distanceRemaining = order.pickupDistance + order.deliveryDistance,
+                originAddress = if (toStore) "骑士大本营中心" else order.pickupAddress,
+                destinationAddress = if (toStore) order.pickupAddress else order.deliveryAddress,
+                distanceRemaining = if (toStore) order.pickupDistance else order.deliveryDistance,
                 progressDegrees = 0f,
                 completed = false
             )

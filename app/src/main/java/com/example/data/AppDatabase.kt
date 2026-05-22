@@ -59,7 +59,7 @@ interface TransactionDao {
 
 @Database(
     entities = [RiderProfile::class, DeliveryOrder::class, WalletTransaction::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
