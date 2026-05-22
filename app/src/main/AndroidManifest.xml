@@ -2,6 +2,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Declare attribution tags to satisfy Android 11+ AppOps auditable location/data requests -->
+    <attribution
+        android:tag="attributionTag"
+        android:label="@string/attribution_label" />
+    <attribution
+        android:tag="location"
+        android:label="@string/attribution_label" />
+    <attribution
+        android:tag="com.aistudio.hustlerider.fktwqp"
+        android:label="@string/attribution_label" />
+
     <!-- Project permissions setup for high precision location, camera, and gallery selection -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
