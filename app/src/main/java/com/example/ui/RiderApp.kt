@@ -269,7 +269,7 @@ fun RiderLoginScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.Star,
-                    contentDescription = "Rider Hustle Logo",
+                    contentDescription = "Rider Suda Logo",
                     tint = colors.accent,
                     modifier = Modifier.size(42.dp)
                 )
@@ -279,7 +279,7 @@ fun RiderLoginScreen(
 
             // Brand Text
             Text(
-                text = "HUSTLE",
+                text = "速达",
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
                 color = colors.primary,
@@ -1440,6 +1440,28 @@ fun DeliveryOrderCard(
     
     val isPickupDone = order.pickupPhoto != null
     val isDeliveryDone = order.deliveryPhoto != null
+
+    val pickupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: android.graphics.Bitmap? ->
+        if (bitmap != null) {
+            val path = "pickup_photo_${order.id}_${System.currentTimeMillis()}.jpg"
+            viewModel.confirmPickupWithPhoto(order, path) {
+                android.widget.Toast.makeText(context, "📸 已到店，现场拍照验证通过！状态已更新为「配送中」且完成导航解锁。", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    val deliveryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: android.graphics.Bitmap? ->
+        if (bitmap != null) {
+            val path = "delivery_photo_${order.id}_${System.currentTimeMillis()}.jpg"
+            viewModel.confirmDeliveryWithPhoto(order, path) {
+                android.widget.Toast.makeText(context, "📸 已送达顾客处，现场签收拍照验证通过！「确认结单」已完美解锁。", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
     
     val badgeBg = when {
         order.status == "PENDING_GRAB" -> if (isUrgent) Color(0xFFFFEDD5) else Color(0xFFDCFCE7)
@@ -1699,29 +1721,6 @@ fun DeliveryOrderCard(
                     )
                 }
                 "DELIVERING" -> {
-                    // Dynamic photo capture launchers local to each list card
-                    val pickupLauncher = rememberLauncherForActivityResult(
-                        contract = ActivityResultContracts.TakePicturePreview()
-                    ) { bitmap: android.graphics.Bitmap? ->
-                        if (bitmap != null) {
-                            val path = "pickup_photo_${order.id}_${System.currentTimeMillis()}.jpg"
-                            viewModel.confirmPickupWithPhoto(order, path) {
-                                android.widget.Toast.makeText(context, "📸 已到店，现场拍照验证通过！状态已更新为「配送中」且完成导航解锁。", android.widget.Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }
-
-                    val deliveryLauncher = rememberLauncherForActivityResult(
-                        contract = ActivityResultContracts.TakePicturePreview()
-                    ) { bitmap: android.graphics.Bitmap? ->
-                        if (bitmap != null) {
-                            val path = "delivery_photo_${order.id}_${System.currentTimeMillis()}.jpg"
-                            viewModel.confirmDeliveryWithPhoto(order, path) {
-                                android.widget.Toast.makeText(context, "📸 已送达顾客处，现场签收拍照验证通过！「确认结单」已完美解锁。", android.widget.Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }
-
                     // Action controls for Active Delivering
                     Row(
                         modifier = Modifier.fillMaxWidth(),
